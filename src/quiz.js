@@ -127,7 +127,7 @@ function renderAppStructure() {
         </div>
 
         <!-- Result Container -->
-        <div id="result-container" class="hidden text-center">
+            <div id="result-container" class="hidden text-center">
             <svg class="w-20 h-20 mx-auto mb-4 text-primary-blue animate-bounce" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
             <h2 class="text-3xl font-bold text-gray-800 mb-4">당신의 SNS 심리 유형은?</h2>
             
@@ -146,9 +146,15 @@ function renderAppStructure() {
                 <!-- Description will be inserted here -->
             </div>
             
-            <button onclick="window.restartQuiz()" class="mt-8 py-3 px-6 btn btn-yellow">
-                다시 테스트하기
-            </button>
+            <div style="display:flex; gap:12px; justify-content:center; flex-wrap:wrap; margin-top:18px">
+                <button id="share-button" class="mt-2 py-3 px-6 btn btn-primary">공유 링크 만들기</button>
+                <button onclick="window.restartQuiz()" class="mt-2 py-3 px-6 btn btn-yellow">다시 테스트하기</button>
+            </div>
+
+            <div id="share-box" class="hidden" style="margin-top:12px; display:flex; gap:8px; justify-content:center; align-items:center;">
+                <input id="share-link" readonly style="padding:8px 10px; border-radius:8px; border:1px solid #e5e7eb; width:60%;" />
+                <button id="copy-link" class="btn btn-primary">복사</button>
+            </div>
         </div>
     `;
 
@@ -163,6 +169,10 @@ function renderAppStructure() {
 
     // 이벤트 리스너 연결
     submitButton.addEventListener('click', submitQuiz);
+    const shareBtn = document.getElementById('share-button');
+    const copyBtn = document.getElementById('copy-link');
+    if (shareBtn) shareBtn.addEventListener('click', handleShare);
+    if (copyBtn) copyBtn.addEventListener('click', copyShareLink);
 }
 
 
@@ -317,7 +327,147 @@ function submitQuiz() {
 
     // 결과 화면 표시
     resultContainer.classList.remove('hidden');
+
+    // show share box hidden state reset
+    const shareBox = document.getElementById('share-box');
+    if (shareBox) shareBox.classList.add('hidden');
 }
+
+// --- 공유 링크 생성 및 복원 기능 ---
+function encodePayload(obj) {
+    try {
+        return btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+    } catch (e) {
+        return '';
+    }
+}
+
+function decodePayload(str) {
+    try {
+        return JSON.parse(decodeURIComponent(escape(atob(str))));
+    } catch (e) {
+        return null;
+    }
+}
+
+function handleShare() {
+    // build minimal payload from displayed results (scoreBreakdown DOM is built from scoreDetails)
+    // We'll reconstruct by reading the breakdown entries
+    const entries = Array.from(document.querySelectorAll('#score-breakdown > div'));
+    let scores = {};
+    entries.forEach(el => {
+        const titleEl = el.querySelector('span');
+        if (!titleEl) return;
+        const m = titleEl.textContent.match(/(.+) \((\d+)\/15점\)/);
+        if (m) {
+            const type = m[1].trim();
+            const score = Number(m[2]);
+            scores[type] = score;
+        }
+    });
+
+    const payload = { scores, ts: Date.now() };
+    const code = encodePayload(payload);
+    if (!code) return alert('공유 링크 생성에 실패했습니다.');
+
+    const url = `${window.location.origin}${window.location.pathname}#share=${code}`;
+    const shareBox = document.getElementById('share-box');
+    const shareInput = document.getElementById('share-link');
+    if (shareInput) shareInput.value = url;
+    if (shareBox) shareBox.classList.remove('hidden');
+    // also try to copy automatically
+    try { navigator.clipboard.writeText(url); } catch (e) { /* ignore */ }
+}
+
+function copyShareLink() {
+    const shareInput = document.getElementById('share-link');
+    if (!shareInput) return;
+    shareInput.select();
+    try {
+        document.execCommand('copy');
+        alert('공유 링크가 복사되었습니다.');
+    } catch (e) {
+        try { navigator.clipboard.writeText(shareInput.value); alert('공유 링크가 복사되었습니다.'); } catch (err) { alert('복사에 실패했습니다.'); }
+    }
+}
+
+function showSharedResultFromPayload(payload) {
+    if (!payload || !payload.scores) return;
+    // prepare scoreDetails from payload.scores
+    const maxScorePerType = 15;
+    let scoreDetails = Object.keys(payload.scores).map(type => {
+        const score = payload.scores[type];
+        const percentage = Math.round((score / maxScorePerType) * 100);
+        return { type, score, percentage, colorCode: getBarColorCode(type) };
+    });
+    scoreDetails.sort((a,b) => b.score - a.score);
+
+    const maxScore = scoreDetails[0].score;
+    const topTypes = scoreDetails.filter(d => d.score === maxScore).map(d => d.type);
+
+    // build final title & description similar to submitQuiz
+    let finalResultTitle = '';
+    let finalDescriptionHtml = '';
+    if (topTypes.length === 1) {
+        const resultInfo = typeDescriptions[topTypes[0]];
+        finalResultTitle = resultInfo.title;
+        finalDescriptionHtml = `<p class="font-bold text-gray-900 mb-2">요약</p><p>${resultInfo.description}</p>`;
+    } else {
+        const tiedTitles = topTypes.map(type => typeDescriptions[type].title.split(':')[0]);
+        finalResultTitle = `${tiedTitles.join(' 및 ')}: 두드러지는 복합 심리 유형!`;
+        const detailedDescriptions = topTypes.map(type => {
+            const info = typeDescriptions[type];
+            const subTitle = info.title.split(': ')[1].trim();
+            return `
+                <div class="mb-6 pb-4 border-b border-gray-200 last:border-b-0 last:mb-0">
+                    <p class="text-xl font-extrabold" style="color:var(--primary-blue); margin-bottom:6px">${type}</p>
+                    <p class="text-lg font-semibold text-gray-800 mb-2">${subTitle}</p>
+                    <p class="text-base">${info.description}</p>
+                </div>
+            `;
+        }).join('');
+        finalDescriptionHtml = `
+            <div class="mb-4">
+                <p class="font-bold text-gray-900 mb-2">종합 분석</p>
+                <p class="mb-4 text-base">당신은 **${topTypes.join(', ')}** 유형의 심리적 요인이 동시에 매우 강하게 나타나는 복합적인 사용자입니다.</p>
+            </div>
+            ${detailedDescriptions}
+        `;
+    }
+
+    // ensure DOM exists
+    if (!appDiv) { appDiv = document.getElementById('app'); renderAppStructure(); }
+    quizContainer.classList.add('hidden');
+    resultContainer.classList.remove('hidden');
+
+    resultType.textContent = finalResultTitle;
+    resultDescription.innerHTML = finalDescriptionHtml;
+
+    scoreBreakdown.innerHTML = `<h3 class="text-xl font-bold text-gray-800 mb-4 text-center border-b pb-2">유형별 점수 비율</h3>`;
+    scoreDetails.forEach(detail => {
+        const breakdownHtml = `
+            <div class="mb-4">
+                <div class="flex" style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px">
+                    <span class="font-medium" style="color:#374151">${detail.type} (${detail.score}/${maxScorePerType}점)</span>
+                    <span class="font-bold" style="color: ${detail.colorCode};">${detail.percentage}%</span>
+                </div>
+                <div class="bar-bg">
+                    <div class="bar-fill" style="width: ${detail.percentage}%; background-color: ${detail.colorCode};"></div>
+                </div>
+            </div>
+        `;
+        scoreBreakdown.insertAdjacentHTML('beforeend', breakdownHtml);
+    });
+
+    // show share box with same link (so users can copy shared view)
+    const payloadCode = encodePayload({ scores: payload.scores, ts: payload.ts || Date.now() });
+    const url = `${window.location.origin}${window.location.pathname}#share=${payloadCode}`;
+    const shareBox = document.getElementById('share-box');
+    const shareInput = document.getElementById('share-link');
+    if (shareInput) shareInput.value = url;
+    if (shareBox) shareBox.classList.remove('hidden');
+}
+
 
 // 퀴즈 초기화 및 시작
 function initQuiz() {
@@ -350,5 +500,18 @@ window.restartQuiz = restartQuiz; // 전역에서 접근 가능하도록 설정
 
 // 외부에서 호출할 초기화 함수를 export
 export function initApp() {
+    // if page opened with share payload in hash, show shared result
+    const hash = window.location.hash || '';
+    if (hash.startsWith('#share=')) {
+        const code = hash.replace('#share=', '');
+        const payload = decodePayload(code);
+        if (payload && payload.scores) {
+            // render shared result view
+            if (!appDiv) { appDiv = document.getElementById('app'); renderAppStructure(); }
+            showSharedResultFromPayload(payload);
+            return;
+        }
+    }
+
     initQuiz();
 }
